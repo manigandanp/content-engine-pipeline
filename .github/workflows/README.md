@@ -1,54 +1,41 @@
 # Slack PR Notification Workflow
 
-`.github/workflows/slack-pr-notify.yml` posts pull-request activity from this repository to a Slack channel using a Slack Incoming Webhook.
+This directory contains the `slack-pr-notify.yml` GitHub Actions workflow, which posts notifications about pull request activity to a Slack channel via an incoming webhook.
 
 ## Required Secret
 
-Only one secret is required:
+- `SLACK_WEBHOOK_URL` – A Slack incoming webhook URL (looks like `https://hooks.slack.com/services/T.../B.../...`).
 
-- `SLACK_WEBHOOK_URL` – the URL of a Slack Incoming Webhook.
+Manny will set this up manually.
 
-`GITHUB_TOKEN` is provided automatically by GitHub Actions; you do not need to create it manually.
+## How to Create the Slack Webhook
 
-### How to create and store the Slack webhook
-
-1. Create or open a Slack App:
-   - Go to <https://api.slack.com/apps> and click **Create New App** (or choose an existing app).
-   - Alternatively, use the legacy **Incoming WebHooks** app in your Slack workspace.
-2. Enable Incoming Webhooks:
-   - In the app settings, go to **Incoming Webhooks** and toggle the switch to **On**.
-   - Click **Add New Webhook to Workspace**, choose the channel where notifications should appear, and click **Allow**.
-3. Copy the webhook URL (it looks like `https://hooks.slack.com/services/T.../B.../...`).
-4. Add it to this repository:
-   - Open the repository on GitHub and go to **Settings → Secrets and variables → Actions**.
-   - Click **New repository secret** (or add it as an organization secret if you want to share it across repos).
-   - Name the secret exactly `SLACK_WEBHOOK_URL`, paste the copied URL, and click **Add secret**.
+1. In Slack, go to <https://api.slack.com/apps> and create a new app (or choose an existing one) for the workspace.
+2. Under **Settings > Incoming Webhooks**, toggle the switch **ON**.
+3. Click **Add New Webhook to Workspace**, select the target channel, and click **Allow**.
+4. Copy the webhook URL.
+5. In the GitHub repository, go to **Settings > Secrets and variables > Actions > New repository secret**.
+6. Name the secret exactly `SLACK_WEBHOOK_URL`, paste the copied URL, and click **Add secret**.
 
 ## Triggered Events
 
-The workflow runs on the following PR-related activity:
+The workflow runs on the following PR activity:
 
-- `pull_request`: `opened`, `closed`, `reopened`, `synchronize`, `edited`
-- `pull_request_review`: `submitted`
-- `issue_comment`: `created` — but only when the comment is on a pull request
-- `pull_request_review_comment`: `created`
-
-The job has an `if` guard that skips plain issue comments (comments on non-PR issues).
+- Pull request: `opened`, `closed`, `reopened`, `synchronize`, `edited`, `labeled`, `unlabeled`, `review_requested`, `review_request_removed`
+- PR comments (`issue_comment` on a PR only): `created`, `edited`, `deleted`
+- Pull request reviews: `submitted`, `edited`, `dismissed`
+- Pull request review comments: `created`, `edited`, `deleted`
 
 ## Color Legend
 
-Slack attachment colors indicate the activity type:
+The Slack attachment color indicates the activity type:
 
-- **Green** (`good`) — PR opened, PR merged, or review approved.
-- **Yellow** (`warning`) — PR updated with new commits (`synchronize`), PR edited, new comments, or review commented/dismissed.
-- **Red** (`danger`) — PR closed without merge, or review changes requested.
+- **Green (`#36a64f`)** – PR opened, or review approved.
+- **Yellow (`#daa032`)** – New commits (`synchronize`), edited, labeled/unlabeled, review requested/removed, reopened, comments (issue or review), or review commented. (Default.)
+- **Red (`#ff0000`)** – PR closed, or review state `changes_requested` or `dismissed`.
 
-## Mentioning Masa
+## Notes
 
-When a PR is opened or updated with new commits, the notification appends the line:
-
-> Masa please review this PR
-
-## Automated Review
-
-Pull requests in this repository also receive an automated review by Masa (Hermes Agent) and require human approval before they can be merged.
+- `issue_comment` notifications only fire for comments made on pull requests. The job-level `if` guard `github.event_name != 'issue_comment' || github.event.issue.pull_request` filters out plain issue comments.
+- For `opened` and `synchronize` events, the notification includes the line `Review: @Masa please review this PR`.
+- If `SLACK_WEBHOOK_URL` is not set, the workflow logs a warning and exits successfully (no failure) so it does not block other work before the secret is configured.
