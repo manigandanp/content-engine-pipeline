@@ -175,7 +175,7 @@ jobs:
           # Ask Masa to review on newly opened PRs and new pushes.
           review_request=""
           if [[ "$EVENT_NAME" == "pull_request" && ("$ACTION" == "opened" || "$ACTION" == "synchronize") ]]; then
-            review_request="Masa please review this PR"
+            review_request="<@U0AUUSVQUL8> please review this PR"
           fi
 
           fallback="$label · $REPO#$num"
