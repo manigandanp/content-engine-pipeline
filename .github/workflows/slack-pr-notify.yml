@@ -1,0 +1,161 @@
+name: Slack PR Notify
+
+on:
+  pull_request:
+    types: [opened, closed, reopened, synchronize, edited, labeled, unlabeled, review_requested, review_request_removed]
+  issue_comment:
+    types: [created, edited, deleted]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Only act when the comment is on a PR; plain issue comments are skipped.
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+
+    steps:
+      - name: Send Slack notification
+        env:
+          WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          PR_TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          PR_URL: ${{ github.event.pull_request.html_url || github.event.issue.html_url }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_API_URL: ${{ github.event.pull_request.url || github.event.issue.pull_request.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${WEBHOOK_URL:-}" ]]; then
+            echo "Warning: SLACK_WEBHOOK_URL is not set. Skipping notification."
+            exit 0
+          fi
+
+          # Fetch head ref from the GitHub API when it is not in the event payload (e.g. issue_comment).
+          head_ref="${HEAD_REF:-}"
+          if [[ -z "$head_ref" && -n "${PR_API_URL:-}" && -n "${GITHUB_TOKEN:-}" ]]; then
+            pr_data=$(curl -s -S -H "Authorization: token ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "${PR_API_URL}" || true)
+            if [[ -n "$pr_data" ]]; then
+              head_ref=$(echo "$pr_data" | jq -r '.head.ref // empty' || true)
+            fi
+          fi
+          [[ -z "$head_ref" ]] && head_ref="unknown"
+
+          # Map review state to friendly text.
+          review_state_friendly=""
+          case "${REVIEW_STATE:-}" in
+            approved)          review_state_friendly="approved" ;;
+            changes_requested) review_state_friendly="changes requested" ;;
+            commented)         review_state_friendly="commented" ;;
+            dismissed)         review_state_friendly="dismissed" ;;
+          esac
+
+          # Color coding:
+          # green (#36a64f) = opened, OR review state approved
+          # yellow (#daa032) = synchronize/new commit, edited, labeled, unlabeled,
+          #                    review_requested, review_request_removed, reopened,
+          #                    comment (issue_comment / review_comment), review state commented
+          # red (#ff0000) = closed (whether merged or not), review state changes_requested,
+          #                 review state dismissed, review edited/dismissed
+          # default yellow
+          color="#daa032"
+          if [[ "$ACTION" == "opened" ]] || [[ "${REVIEW_STATE:-}" == "approved" ]]; then
+            color="#36a64f"
+          elif [[ "$ACTION" == "closed" ]] \
+            || [[ "${REVIEW_STATE:-}" == "changes_requested" ]] \
+            || [[ "${REVIEW_STATE:-}" == "dismissed" ]] \
+            || { [[ "$EVENT_NAME" == "pull_request_review" ]] && [[ "$ACTION" == "edited" || "$ACTION" == "dismissed" ]]; }; then
+            color="#ff0000"
+          fi
+
+          event_display="${EVENT_NAME} / ${ACTION}"
+          [[ -n "$review_state_friendly" ]] && event_display="${event_display} (${review_state_friendly})"
+
+          # Mention Masa only on newly opened PRs or new commits.
+          review_request_line=""
+          if [[ "$ACTION" == "opened" ]] || [[ "$ACTION" == "synchronize" ]]; then
+            review_request_line="Review: @Masa please review this PR"
+          fi
+
+          # Truncate comment bodies to 500 characters.
+          comment_body=""
+          if [[ "$EVENT_NAME" == "issue_comment" ]] || [[ "$EVENT_NAME" == "pull_request_review_comment" ]]; then
+            comment_body="${COMMENT_BODY:-}"
+            if [[ "${#comment_body}" -gt 500 ]]; then
+              comment_body="${comment_body:0:500}..."
+            fi
+          fi
+
+          # For synchronize events, include the number of changed files and recent commit messages.
+          commit_info=""
+          if [[ "$ACTION" == "synchronize" ]]; then
+            changed_files="${CHANGED_FILES:-}"
+            commit_messages=""
+            if [[ -n "${PR_API_URL:-}" && -n "${GITHUB_TOKEN:-}" ]]; then
+              commits_data=$(curl -s -S -H "Authorization: token ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "${PR_API_URL}/commits" || true)
+              if [[ -n "$commits_data" ]]; then
+                commit_messages=$(echo "$commits_data" | jq -r '[.[] | "- " + (.commit.message | split("\n")[0])] | join("\n")' || true)
+              fi
+            fi
+            commit_info="Files changed: ${changed_files:-N/A}"
+            if [[ -n "$commit_messages" ]]; then
+              commit_info="${commit_info}"$'\n'"New commits:"$'\n'"${commit_messages}"
+            fi
+          fi
+
+          # Build the Slack payload with jq so special characters in titles/comments stay valid JSON.
+          payload=$(jq -n \
+            --arg color "$color" \
+            --arg title "${PR_TITLE:-}" \
+            --arg number "${PR_NUMBER:-}" \
+            --arg repo "${REPO:-}" \
+            --arg actor "${ACTOR:-}" \
+            --arg event "$event_display" \
+            --arg url "${PR_URL:-}" \
+            --arg branch "$head_ref" \
+            --arg review_request "$review_request_line" \
+            --arg comment "$comment_body" \
+            --arg commit_info "$commit_info" \
+            '{
+              attachments: [
+                {
+                  color: $color,
+                  text: $review_request,
+                  fields: [
+                    { title: "PR", value: "\($title) #\($number)", short: false },
+                    { title: "Repo", value: $repo, short: true },
+                    { title: "Author", value: $actor, short: true },
+                    { title: "Event", value: $event, short: true },
+                    { title: "Branch", value: $branch, short: true },
+                    { title: "URL", value: $url, short: false }
+                  ] + (
+                    if $comment != "" then [{ title: "Comment", value: $comment, short: false }] else [] end
+                  ) + (
+                    if $commit_info != "" then [{ title: "Commits", value: $commit_info, short: false }] else [] end
+                  )
+                }
+              ]
+            }')
+
+          # Validate JSON before posting.
+          echo "$payload" | jq empty
+
+          # Post to Slack.
+          curl -s -S -X POST -H 'Content-type: application/json' --data "$payload" "$WEBHOOK_URL"
