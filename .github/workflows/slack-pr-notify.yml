@@ -10,13 +10,12 @@ on:
   pull_request_review_comment:
     types: [created]
 
-permissions:
-  contents: read
-  pull-requests: read
-
 jobs:
   notify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment' || (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
     steps:
       - name: Send Slack notification
@@ -85,6 +84,9 @@ jobs:
               esac
               ;;
             pull_request_review)
+              # NOTE: for pull_request_review events, the review STATE drives the color
+              # (approved=green, changes_requested/dismissed=red, commented=yellow), so an
+              # edited review keeps the color of its current state.
               num="$PR_NUM"
               title="$PR_TITLE"
               url="$PR_URL"
