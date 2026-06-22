@@ -1,0 +1,27 @@
+name: Test Cross-Repo Checkout
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout private skills repo
+        uses: actions/checkout@v4
+        with:
+          repository: manigandanp/content-engine-skills
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          path: skills/
+          persist-credentials: false
+
+      - name: Verify private repo contents
+        run: |
+          echo "Private repo files:"
+          ls -la skills/
+          echo "Cross-repo checkout SUCCESS"
